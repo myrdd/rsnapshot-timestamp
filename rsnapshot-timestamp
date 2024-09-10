@@ -54,17 +54,34 @@ function oldest_snap_since() {
 
 # get_start: For the given period type, get the start of the current period
 function get_start() {
-	case "$1" in
-		hours)	date -Ihours	;;
-		days)	date -I		;;
-		months)	date +%Y-%m-01	;;
-		years)	date +%Y-01-01	;;
+	local period="$1"
+	local interval="$2"
+	interval_re='^[1-9][0-9]*$'
+	if [[ ! "$interval" =~ $interval_re ]]; then
+		echo unsupported
+		return
+	fi
+	local interval_minus_1=$(( interval - 1 ))
+	case "$period" in
+		minutes)
+			local minute=$(( ( $(date +%-M) / interval ) * interval ))
+			date +%Y-%m-%dT%H:$(printf "%02d" $minute)
+			;;
+		hours)
+			local hour=$(( ( $(date +%-H) / interval ) * interval ))
+			date +%Y-%m-%dT$(printf "%02d" $hour):00
+			;;
+		days)
+			date -I -d "-$interval_minus_1 days"	;;
+		months)
+			date -I -d "$(date +%Y-%m-01) -$interval_minus_1 months"	;;
+		years)
+			date -I -d "$(date +%Y-01-01) -$interval_minus_1 years"	;;
 		weeks)
 			firstdayofweek="$(locale day | cut -f1 -d\;)"
-			date -I -d "$firstdayofweek 1 weeks ago"
+			date -I -d "next $firstdayofweek -$interval weeks"
 			;;
 		*)
-			log_err "period $1 not supported"
 			echo unsupported
 			;;
 	esac
@@ -159,23 +176,37 @@ fi
 
 # get periods and retention settings from rsnapshot.conf
 declare -A periods
-while read period keep ; do
-	periods[$period]=$keep
+while read period_spec keep ; do
+	periods[$period_spec]=$keep
 done < <(get_config retain)
 
 # save the name of snapshots to keep
 declare -A keep_snaps
 
 # iterate over each retain period type and build a list of snapshots to keep
-for period in "${!periods[@]}" ; do
+for period_spec in "${!periods[@]}" ; do
+	case "$period_spec" in
+		*_*)
+			splitarr=(${period_spec//_/ })  # split $period_spec by "_"
+			interval=${splitarr[0]}
+			period=${splitarr[1]}
+			;;
+		*)
+			interval=1
+			period=$period_spec
+			;;
+	esac
 
 	# get the start of the current period
-	current="$(get_start "$period")"
-	[[ $current = unsupported ]] && exit 1
+	current="$(get_start "$period" "$interval")"
+	if [[ $current = unsupported ]]; then
+		log_err "period $period_spec not supported"
+		exit 1
+	fi
 
 	# count backwards in time for the number of periods to retain
 	# then keep the next newer snapshot since that point in time
-	for num in $(seq 0 "${periods[$period]}") ; do
+	for num in $( seq 0 $interval $(( ${periods[$period_spec]} * $interval )) ) ; do
 		start_date=$(date --rfc-3339=seconds -d "$current $num $period ago")
 		snapshot="$(oldest_snap_since "$start_date")"
 		[[ -d $snapshot ]] && keep_snaps[$snapshot]=keep
