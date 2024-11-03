@@ -207,7 +207,23 @@ for period_spec in "${!periods[@]}" ; do
 	# count backwards in time for the number of periods to retain
 	# then keep the next newer snapshot since that point in time
 	for num in $( seq 0 $interval $(( ${periods[$period_spec]} * $interval )) ) ; do
-		start_date=$(date --rfc-3339=seconds -d "$current $num $period ago")
+		start_date_spec="$current $num $period ago"
+		case "$period" in
+			minutes)
+				start_minute=$(date -d "$start_date_spec" +"%-M")
+				start_minute=$(( ( start_minute / interval ) * interval ))
+				start_date_spec=$(date -d "$start_date_spec" \
+					+%Y-%m-%dT%H:$(printf "%02d" $start_minute)%:z)
+				;;
+			hours)
+				start_hour=$(date -d "$start_date_spec" +"%-H")
+				start_hour=$(( ( start_hour / interval ) * interval ))
+				start_date_spec=$(date -d "$start_date_spec" \
+					+%Y-%m-%dT$(printf "%02d" $start_hour):00%:z)
+				;;
+			*) ;;
+		esac
+		start_date=$(date --rfc-3339=seconds -d "$start_date_spec")
 		snapshot="$(oldest_snap_since "$start_date")"
 		[[ -d $snapshot ]] && keep_snaps[$snapshot]=keep
 	done
